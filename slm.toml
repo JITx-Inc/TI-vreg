@@ -2,3 +2,6 @@ name = "TI-vreg"
 version = "0.1.0"
 [dependencies]
 JITX3 = { path = "{SLM_ROOT}/JITX3" }
+# Introduce this once we have stabilized versions
+#  Will need setup a path dependency to `power-systems` in the mean time.
+#power-systems = { git = "JITx-Inc/power-systems", version = "0.2.0" }

@@ -1,147 +1,348 @@
-; This file is generated based on the parts database query below:")
-;   database-part(["manufacturer" => "Texas Instruments", "mpn" => "TPS62933DRLR"])
 #use-added-syntax(jitx)
 defpackage TI-vreg/components/TPS6293x :
   import core
+  import math
   import jitx
   import jitx/commands
-  import ocdb/utils/generic-components
-  import ocdb/utils/box-symbol
-  import math
+  import jitx/parts/query-api
 
   import jsl/errors
+  import jsl/ensure
+  import jsl/bundles
+  import jsl/design/E-Series
+  import jsl/symbols
+  import jsl/landpatterns
+  import jsl/circuits/Network
 
+  import power-systems/DC-DC/buck
 
 public pcb-enum TI-vreg/components/TPS6293x/TPS6293xOptions:
   TPS6293x-PG
   TPS6293x-SS
+
+defn convert-pn-to-option (pn:String) -> TPS6293xOptions:
+  if prefix?(pn, "TPS62933P") or prefix?(pn, "TPS62933O"):
+    TPS6293x-PG
+  else:
+    TPS6293x-SS
+
+val Vin-UVLO-RISE = min-typ-max(3.4, 3.6, 3.8)
+val Vin-UVLO-FALL = min-typ-max(3.1, 3.3, 3.5)
 
 public pcb-component component (pn:String, opt:TPS6293xOptions):
   description = "Step-down type Adjustable 3.8V~30V 3A 0.8V~22V SOT-583  DC-DC Converters ROHS"
   manufacturer = "Texas Instruments"
   mpn = pn
   datasheet = "https://www.ti.com/lit/ds/symlink/tps62932.pdf"
+  reference-prefix = "U"
+
+  if not contains?([TPS6293x-PG, TPS6293x-SS], opt):
+    throw $ ValueError("Unhandled Option: %_" % [opt])
+
   pin-properties :
-    [pin:Ref | pads:Ref ... | side:Dir ]
-    [VIN | p[3] | Left ]
-    [EN | p[2] | Left ]
+    [pin:Ref | pads:Int ... | side:Dir ]
+    [VIN | 3 | Left ]
+    [EN | 2 | Left ]
     if opt == TPS6293x-PG:
-      [PG | p[7] | Left ]
+      [PG | 7 | Left ]
     else if ( opt == TPS6293x-SS ):
-      [SS | p[7] | Left ]
-    else:
-      throw $ ValueError("Unhandled Option: %_" % [opt])
-    [SS | p[7] | Left ]
-    [RT | p[1] | Left ]
-    [BST | p[6] | Right ]
-    [SW | p[5] | Right ]
-    [FB | p[8] | Right ]
-    [GND | p[4] | Right ]
+      [SS | 7 | Left ]
+    [RT | 1 | Left ]
+    [BST | 6 | Right ]
+    [SW | 5 | Right ]
+    [FB | 8 | Right ]
+    [GND | 4 | Right ]
 
-  assign-landpattern(lp)
-  make-box-symbol()
+  val box = BoxSymbol(self)
+  assign-symbol $ create-symbol(box)
 
-  property(self.VIN.power-pin) = ocdb/utils/property-structs/PowerPin(min-max(3.8, 30.0))
+  val pkg = SOT(
+    num-leads = 8,
+    lead-profile = Lead-Profile(
+      span = min-max(1.5, 1.7),
+      pitch = 0.5,
+      lead = SOT-Lead(
+        length = min-max(0.2, 0.4)
+        width = min-max(0.17, 0.27)
+    ),
+    )
+    package-body = PackageBody(
+      width = min-max(1.1, 1.3),
+      length = min-max(2.0, 2.2),
+      height = min-max(0.5, 0.6)
+    ),
+  )
+
+  assign-landpattern $ create-landpattern(pkg)
+
+  ; property(self.VIN.power-pin) = ocdb/utils/property-structs/PowerPin(min-max(3.8, 30.0))
 
   property(self.category) = "power_supply_chip"
   property(self.manufacturer_aliases) = ["Texas Instruments"]
   property(self.mpn_aliases) = ["TPS62933DRLR"]
-  property(self.reference_prefix) = "U"
-  property(self.trust) = "low"
-  property(self.x) = 1.280
-  property(self.y) = 2.286
-  property(self.area) = 2.926
   property(self.case) = "SOT-583"
 
-public pcb-module module (-- output-voltage:Double = 3.3 input-voltage:Double = 25.0, soft-start:Double = 2.0e-3, output-current:Double = 3.0, ripple:Double = 30.0e-3, placed:True|False = false):
-  pin vin
-  pin vout
-  pin gnd
-  pin pg
-  pin en
+
+  property(self.V-REF) = min-typ-max(0.788, 0.8, 0.812) ; Volts
+  property(self.I-ss) = 5.5e-6 +/- 1.0e-6 ; Amps
+
+  property(self.Vin-MAX) = 30.0
+  property(self.Vin-MIN) = 3.8
+
+  property(self.Vin-UVLO-RISE) = Vin-UVLO-RISE
+  property(self.Vin-UVLO-FALL) = Vin-UVLO-FALL
+
+  ; We should likely give some margins around these
+  ;  values as the datasheet says they are not tested - they
+  ;  are the design target.
+  property(self.Ton-MIN) = 70.0e-9 ; Seconds
+  property(self.Ton-MAX) = 7.0e-6 ; Seconds
+  property(self.Toff-MIN) = 140.0e-9 ; Seconds
+
+  property(self.V-EN-RISE) = typ-max(1.21, 1.28)
+  property(self.V-EN-FALL) = min-typ(1.1, 1.17)
+
+doc: \<DOC>
+Compute the Frequency for a given RT pull-down resistor
+
+@see Section 9.3.5 in the Datasheet
+
+@param R Resistance value for the resistor that connects RT to
+GND. This value is in ohms. R must be positive and in the range
+[8kΩ, 115kΩ]. Values outside this range are not defined per the
+datasheet.
+@return Frequency in Hz
+@throws ValueError if `R` is outside valid ranges defined above.
+<DOC>
+defn compute-freq (R:Double) -> Double:
+  ensure-positive!("R", R)
+  if R < 8.0e3 or R > 115.0e3:
+    throw $ ValueError("Undefined Converter Behavior for Resistance Value: %_" % [R])
+  17293.0 * pow(R / 1000.0, -0.942) * 1000.0
+
+defn compute-freq (R:Toleranced) -> Toleranced :
+  val minFreq = compute-freq(max-value(R))
+  val maxFreq = compute-freq(min-value(R))
+  min-max(minFreq, maxFreq)
+
+doc: \<DOC>
+Compute the timing resistor value for a particular switching frequency.
+
+@see Section 9.3.5 in the Datasheet
+
+@param freq Desired Frequency in Hz. The valid range of values
+is [200kHz, 2.2MHz]. This value must be positive.
+@return Resistance value in Ohms to connect between RT and GND.
+<DOC>
+defn compute-timing-resistance (freq:Double) -> Double :
+  if freq < 200.0e3 or freq > 2.2e6:
+    throw $ ValueError("Undefined Converter Behavior for Frequency Value: %_" % [freq])
+  1000.0 * exp(log(freq / (1000.0 * 17293.0)) / -0.942)
 
 
-  inst buck : components/Texas-Instruments/TPS62933DRLR/component
-  net (vin, buck.VIN)
-  net (en buck.EN)
-  net (pg buck.SS)
-  
-  net GND (buck.GND gnd)
-  val RT-res = res-strap(buck.RT, gnd, 0.0) ; 1.2MHz switchinglo
+doc: \<DOC>
+Compute the Soft Start Time in Seconds
 
-  inst feedback : ocdb/modules/passive-circuits/voltage-divider(source-voltage = typ(output-voltage),  
-                                                                divider-output = 0.8 +/- (3 %), 
-                                                                current = 0.800 / 10.0e3)
+@see Section 9.3.7 in the datasheet
 
-  net (feedback.in vout)
-  net (feedback.out buck.FB)
-  net (feedback.lo gnd)
+@param C Capacitance connecting SS to GND
+@param vref Voltage ref inside the switcher
+@param I-src Current source typical current
+@return Ramp time from 0-100% over the returned period in seconds.
+<DOC>
+defn compute-soft-start (C:Double|Toleranced -- vref:Double, I-src:Double) -> Toleranced|Double:
+  ensure-positive!("I-src", I-src)
+  ensure-positive!("vref", vref)
+  ensure-positive!("C", C)
+  (vref / I-src) * C
 
-  ; no-connect(buck.EN) ; enabled by default
+doc: \<DOC>
+Compute the capacitance require for a particular soft-start period.
 
-  val css = soft-start * 5.5e-6 / 0.8 ; 2ms soft start
-  val c-ss = cap-strap(buck.SS, gnd, closest-std-val(css, 10.0))
+@see Section 9.3.7 in the datasheet
 
-  val bst-params = ["capacitance" => 0.1e-6 "min-rated-voltage" => 16.0 "temperature-coefficient.code" => "X7R" ]
+@param T Soft-start period in Seconds
+@param vref Voltage ref inside the switcher
+@param I-src Current source typical current
+@return Capacitance value in Farads.
+<DOC>
+defn compute-SS-cap (T:Double|Toleranced -- vref:Double, I-src:Double) -> Toleranced|Double :
+  ensure-positive!("I-src", I-src)
+  ensure-positive!("vref", vref)
+  ensure-positive!("T", T)
+  (I-src / vref) * T
 
-  inst cbst : ceramic-cap(bst-params)
-  net (cbst.p[1], buck.SW)
-  val r-bst = res-strap(cbst.p[2] buck.BST, 2.7) ; resistance smaller than 10 Ω be used between BST to the bootstrap capacitor.
+val DEF_UVLO_IP = 0.7e-6
+val DEF_UVLO_IH = 1.4e-6
 
-  ; Inductor
-  val fsw  = 1.2e6
-  val K = (40 %)
-  val L = closest-std-val(output-voltage / input-voltage * (input-voltage - output-voltage) / (fsw * K * output-current), 20.0)
-  val ripple-current = output-voltage / input-voltage * (input-voltage - output-voltage) / (fsw * L)
-  val peak-current = output-current + ripple-current / 2.
-  val rms-current = pow( pow(output-current, 2.0) + pow(ripple-current, 2.0) / 12.0, 0.5)
+defn compute-uvlo-Ven (vin:Double, R-hi:Double, R-lo:Double -- Ip:Double = DEF_UVLO_IP, Ih:Double = DEF_UVLO_IH) -> Double :
+  ((R-lo * vin) + (R-hi * R-lo * (Ip + Ih))) / (R-hi + R-lo)
 
-  ; Ripple current < 0.1 * rated inductor current
-  println("Inductor: L: %_H, Ripple: %_A, Peak : %_A" % [L, ripple-current, peak-current]) ; Would love to send these to a parametric inductor.
-  inst inductor : database-part(["mpn" => "WPN4020H6R8MT", "manufacturer" => "Sunlord"])
-  net (inductor.p[1] buck.SW)
-  net (inductor.p[2] vout)
 
-  ; Output capacitance
-  val D = output-voltage / input-voltage
-  val cout-min = ripple-current / (fsw * ripple * K) * ((1. - D) * (1. + 1.0 * K) + pow(1.0 * K, 2.) / 12.0 * (2. - D))
-  ; Turns out derating is going to be datasheet-dependent - what a mess.
-  val derated-capacitance = cout-min * 3. ; Arbitrary. The world should be better than this.
-  val cap = 22.0e-6  ; I choose 22uF caps
-  val output-cap-params = ["capacitance" => cap, "case" => "0805" "temperature-coefficient.code" => "X7R", "min-rated-voltage" => output-voltage * 2.]
-  val min-output-caps:Int = to-int(derated-capacitance / cap) + 1
-  val output-caps = to-tuple $
-    for i in 0 to min-output-caps seq :
-      val bc = bypass-cap-strap(inductor.p[2], gnd, output-cap-params)
-      bc
+doc: \<DOC>
+Compute the Resistive Divider values for a UVLO threshold
 
-  ; Input capacitance - 10uF derated.
-  val input-cap-params = ["capacitance" => 10.0e-6, "temperature-coefficient.code" => "X7R", "min-rated-voltage" => input-voltage * 1.5 ]
-  val c-inp-reg-1 = bypass-cap-strap(buck.VIN, gnd, input-cap-params)
-  val c-inp-reg-2 = bypass-cap-strap(buck.VIN, gnd, input-cap-params)
-  val c-inp-sm  = bypass-cap-strap(buck.VIN, gnd, ["capacitance" => 0.1e-6, "temperature-coefficient.code" => "X7R", "min-rated-voltage" => input-voltage * 1.0])
+@param start-V Rising voltage threshold in Volts
+@param stop-V Falling voltage threshold in Volts. Must be less than Rising Threshold.
+@return Tuple of [R-hi, R-lo]
+<DOC>
+defn compute-uvlo-R-values (
+  start-V:Double,
+  stop-V:Double
+  --
+  Ip:Double = DEF_UVLO_IP,
+  Ih:Double = DEF_UVLO_IH
+  ) -> [Double, Double] :
 
-  ; Feedforward cap
-  val c-ff = cap-strap(feedback.in, feedback.out, 100.0e-12) ; 100pf because I wish I had a working simulation.
+  if not (start-V > stop-V):
+    throw $ ValueError("Hysteresis Computation Requires V-Start Greater than V-Stop: v-start=%_ v-stop=%_" % [start-V, stop-V])
 
-  property(vout.voltage) = typ(output-voltage)
+  val Ven-rise = typ(Vin-UVLO-RISE)
+  val Ven-fall = typ(Vin-UVLO-FALL)
 
-  ; placement 
-  if placed :
-    place(buck) at loc(0.0, 0.0, 180.0) on Top
-    place(RT-res) at loc(-1.547, 1.9727, 180.0) on Top
-    place(feedback.r-lo) at loc(1.475, 1.920, 180.0) on Top
-    place(feedback.r-hi) at loc(2.452, 1.920) on Top
-    place(c-ss) at loc(1.860218 0.395469 90.0) on Top
-    place(cbst) at loc(3.497936 -0.597491 180.0) on Top
-    place(r-bst) at loc(2.249856 -0.555152, 270.0) on Top
-    place(inductor) at loc(2.592758, -3.859867, 270.0) on Top
-    for (c in output-caps, i in 0 to false) do :
-      place(output-caps[i]) at loc(3.786237 + to-double(i) * -1.79, -8.080, 180.0) on Top
-      geom(GND) :
-        via(ocdb/utils/defaults/default-via) at Point(3.786237 + to-double(i) * -1.79, -10.0)
+  val ratio = Ven-fall / Ven-rise
 
-    place(c-inp-reg-1) at loc(-3.565656 -2.036099 180.0) on Top
-    place(c-inp-reg-2) at loc(-6.099985 -2.036099 180.0) on Top
-    place(c-inp-sm) at loc(-1.770369 -0.807124 180.0) on Top
-    place(c-ff) at loc(3.411575 1.927403 0.0) on Top
+  val R-hi-num = (start-V * ratio) - stop-V
+  val R-hi-den = (Ip * (1.0 - ratio)) + Ih
+  val R-hi = R-hi-num / R-hi-den
+
+  val R-lo-num = R-hi * Ven-fall
+  val R-lo-den = stop-V - Ven-fall + (R-hi * (Ip + Ih))
+  val R-lo = R-lo-num / R-lo-den
+
+  [R-hi, R-lo]
+
+defn compute-uvlo-R (thresh:Double|[Double, Double], prec:Percentage) -> [Double, Double, Toleranced]:
+
+  val min-hyst = 0.5
+  val [start-V, stop-V] = match(thresh):
+    (x:Double):
+      [x, x - min-hyst]
+    (y:[Double, Double]): y
+
+  ensure-positive!("start-V", start-V)
+  ensure-positive!("stop-V", stop-V)
+
+  ; I'm requiring that the user requested UVLO be higher than the device default
+  ;  because I'm not certain that the thresholds will work correctly if
+  ;  they are not outside that range.
+  val rise-max = max-value(Vin-UVLO-RISE)
+  if not (start-V > rise-max):
+    throw $ ValueError("Request UVLO rise threshold '%_' is less than the default max '%_'" % [start-V, rise-max])
+
+  val fall-max = max-value(Vin-UVLO-FALL)
+  if not (stop-V > fall-max):
+    throw $ ValueError("Request UVLO fall threshold '%_' is less than the default max '%_'" % [stop-V, fall-max])
+
+  val [R-hi-val, R-lo-val] = compute-uvlo-R-values(start-V, stop-V)
+
+  val R-hi = closest-std-val(R-hi-val, prec)
+  val R-lo = closest-std-val(R-lo-val, prec)
+
+  val ven = {compute-uvlo-Ven(_, R-hi, R-lo)}
+  val Ven = min-max(ven(stop-V), ven(start-V))
+  [R-hi, R-lo, Ven]
+
+
+
+doc: \<DOC>
+Create a TPS6293x Series Device
+
+This module handles all of the device specific configuration, but
+doesn't attempt to implement the Buck Converter components (ie, the
+C-in, C-out, L, etc) because these may be application dependent.
+
+
+@param pn Part number (including package specification) for the component to instantiate.
+@param freq Frequency in Hz for the DC/DC to operate at. If this value is `false` - then
+the `RT` pin will be left floating indicating a 500kHz switching frequency. This device
+supports frequencies between 200kHz to 2.2MHz.
+@param SS-period Optional Soft-Start Period for devices that support soft state. For
+chip variants with "Soft Start" - if this value is false, then no capacitor will be placed
+and the device will have a default 2mS soft start.
+For chip variants with "Power Good" - this value is ignored.
+@param UVLO Optional Under-voltage Lockout threshold as applied to the VIN voltage.
+If this value is less than the internal VIN UVLO of 3.6V, then this value is ignored.
+If greater - then we compute the values needed for a resistive divider based on the datasheet's
+recommendations that creates a UVLO at the appropriate voltage and a hystersis of 0.5V.
+If a [Double, Double] tuple is passed, then the first value is the UVLO start threshold and the
+second value is the UVLO stop threshold, effectively given the user the ability to control the
+hysteresis configuration of the UVLO.
+<DOC>
+public pcb-module device (pn:String, freq:Double|False = false, SS-period:Toleranced|False = false, UVLO:Double|[Double,Double]|False = false):
+  val dev-opt = convert-pn-to-option(pn)
+
+  ; This port is primarily a tool for using the
+  ;  Buck Converter Generator functions.
+  port buck : buck-converter([Buck-Bootstrap])
+
+  public inst SW : component(pn, dev-opt)
+  net GND (SW.GND)
+
+  ; Connect to the buck bundle
+  connect-buck-converter(self.buck, SW.VIN, SW.GND, SW.SW, SW.FB, SW.BST)
+
+  if freq is-not False:
+    val prec = (1 %)
+    val RT-val = compute-timing-resistance(freq as Double)
+    val R-std = closest-std-val(RT-val, prec)
+    ; val exp-freq = compute-freq(R-std +/- prec)
+    ; println("Computed Freq: %_" % [exp-freq])
+    insert-resistor(SW.RT, SW.GND,
+      resistance = R-std,
+      precision = prec
+      short-trace? = true
+    )
+  else:
+    no-connect(SW.RT)
+
+  if dev-opt == TPS6293x-SS and SS-period is-not False:
+    ; Compute Timing SS
+    val SS = SS-period as Toleranced
+    val SS-vals = compute-SS-cap(SS,
+      vref = typ(property(SW.V-REF))
+      I-src = typ(property(SW.I-ss))
+    )
+
+    val series = E24()
+    val C-SS-typs = to-tuple $ for v in find-in-range(series, SS-vals as Toleranced) seq:
+      typ(v)
+    val C-SS-range = min-max(minimum(C-SS-typs), maximum(C-SS-typs))
+
+    ; println("SS: %_ " % [C-SS-range])
+    insert-capacitor(
+      SW.SS, SW.GND,
+      capacitance = C-SS-range,
+      precision = precision(series)
+      type = "ceramic",
+      short-trace? = true
+      temperature-coefficient_code = "X7R",
+      rated-voltage = AtLeast(max-value(property(SW.V-REF)) * 2.0)
+    )
+
+  match(UVLO):
+    (_:False): false
+    (given:Double|[Double, Double]):
+      val prec = (1 %)
+      val [hi-val, lo-val, Ven] = compute-uvlo-R(given, prec)
+
+      ; println("UVLO: R-hi=%_ R-lo=%_ Ven-rise=%_ Ven-fall=%_" % [hi-val, lo-val, max-value(Ven), min-value(Ven)])
+      val max-Ven-thresh = 5.5
+      if max-value(Ven) > max-Ven-thresh:
+        throw $ ValueError("Invalid Ven '%_' - Must be less than threshold '%_'" % [max-Ven-thresh])
+
+      val R-hi = Elem $ create-resistor(
+        resistance = hi-val,
+        precision = prec
+      )
+      val R-lo = Elem $ create-resistor(
+        resistance = lo-val,
+        precision = prec
+      )
+
+      inst uvlo-div : create-circuit(R-hi + Tap(`out, R-lo))
+
+      net (SW.VIN, uvlo-div.p[1])
+      net UVLO-EN (SW.EN, uvlo-div.out)
+      net (GND, uvlo-div.p[2])
+
