@@ -39,6 +39,8 @@ public pcb-component component (pn:String, opt:TPS6293xOptions):
   if not contains?([TPS6293x-PG, TPS6293x-SS], opt):
     throw $ ValueError("Unhandled Option: %_" % [opt])
 
+  property(self.adjustable) = true
+
   pin-properties :
     [pin:Ref | pads:Int ... | side:Dir ]
     [VIN | 3 | Left ]
