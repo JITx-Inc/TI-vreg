@@ -16,28 +16,29 @@ defpackage TI-vreg/components/TPS6293x :
 
   import power-systems/DC-DC/buck
 
-public pcb-enum TI-vreg/components/TPS6293x/TPS6293xOptions:
-  TPS6293x-PG
-  TPS6293x-SS
+public pcb-enum TI-vreg/components/TPS6293x/TPS6293x-PN:
+  TPS62932DRL
+  TPS62933DRL
+  TPS62933ODRL
+  TPS62933PDRL
+  TPS62933FDRL
 
-defn convert-pn-to-option (pn:String) -> TPS6293xOptions:
-  if prefix?(pn, "TPS62933P") or prefix?(pn, "TPS62933O"):
-    TPS6293x-PG
-  else:
-    TPS6293x-SS
+
+defn has-PG? (pn:TPS6293x-PN) -> True|False:
+  contains?([TPS62933ODRL, TPS62933PDRL], pn)
+
+defn has-SS? (pn:TPS6293x-PN) -> True|False:
+  not has-PG?(pn)
 
 val Vin-UVLO-RISE = min-typ-max(3.4, 3.6, 3.8)
 val Vin-UVLO-FALL = min-typ-max(3.1, 3.3, 3.5)
 
-public pcb-component component (pn:String, opt:TPS6293xOptions):
+public pcb-component component (pn:TPS6293x-PN):
   description = "Step-down type Adjustable 3.8V~30V 3A 0.8V~22V SOT-583  DC-DC Converters ROHS"
   manufacturer = "Texas Instruments"
-  mpn = pn
+  mpn = to-string(pn)
   datasheet = "https://www.ti.com/lit/ds/symlink/tps62932.pdf"
   reference-prefix = "U"
-
-  if not contains?([TPS6293x-PG, TPS6293x-SS], opt):
-    throw $ ValueError("Unhandled Option: %_" % [opt])
 
   property(self.adjustable) = true
 
@@ -45,9 +46,9 @@ public pcb-component component (pn:String, opt:TPS6293xOptions):
     [pin:Ref | pads:Int ... | side:Dir | row:Int]
     [VIN     | 3            | Left     | 0      ]
     [EN      | 2            | Left     | 0      ]
-    if opt == TPS6293x-PG:
+    if has-PG?(pn):
       [PG    | 7            | Right    | 0 ]
-    else if ( opt == TPS6293x-SS ):
+    else:
       [SS    | 7            | Left     | 0]
     [RT      | 1            | Left     | 0 ]
     [GND     | 4            | Left     | 2]
@@ -64,7 +65,7 @@ public pcb-component component (pn:String, opt:TPS6293xOptions):
   val card-size = Dims(0.4, 0.3)
   add-decorator(box, self.EN, CardinalityDecorator(InputPin, size = card-size))
 
-  if opt == TPS6293x-PG:
+  if has-PG?(pn):
     add-decorator(box, self.PG, OpenCollectorDecorator())
 
   assign-symbol $ create-symbol(box)
@@ -282,14 +283,18 @@ If a [Double, Double] tuple is passed, then the first value is the UVLO start th
 second value is the UVLO stop threshold, effectively given the user the ability to control the
 hysteresis configuration of the UVLO.
 <DOC>
-public pcb-module device (pn:String, freq:Double|False = false, SS-period:Toleranced|False = false, UVLO:Double|[Double,Double]|False = false):
-  val dev-opt = convert-pn-to-option(pn)
-
+public pcb-module device (
+  pn:TPS6293x-PN
+  --
+  freq:Double|False = false,
+  SS-period:Toleranced|False = false,
+  UVLO:Double|[Double,Double]|False = false
+  ):
   ; This port is primarily a tool for using the
   ;  Buck Converter Generator functions.
   port buck : buck-converter([Buck-Bootstrap])
 
-  public inst SW : component(pn, dev-opt)
+  public inst SW : component(pn)
   net GND (SW.GND)
 
   ; Connect to the buck bundle
@@ -309,7 +314,7 @@ public pcb-module device (pn:String, freq:Double|False = false, SS-period:Tolera
   else:
     no-connect(SW.RT)
 
-  if dev-opt == TPS6293x-SS and SS-period is-not False:
+  if has-SS?(pn) and SS-period is-not False:
     ; Compute Timing SS
     val SS = SS-period as Toleranced
     val SS-vals = compute-SS-cap(SS,
