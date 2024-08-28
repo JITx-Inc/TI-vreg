@@ -42,20 +42,31 @@ public pcb-component component (pn:String, opt:TPS6293xOptions):
   property(self.adjustable) = true
 
   pin-properties :
-    [pin:Ref | pads:Int ... | side:Dir ]
-    [VIN | 3 | Left ]
-    [EN | 2 | Left ]
+    [pin:Ref | pads:Int ... | side:Dir | row:Int]
+    [VIN     | 3            | Left     | 0      ]
+    [EN      | 2            | Left     | 0      ]
     if opt == TPS6293x-PG:
-      [PG | 7 | Left ]
+      [PG    | 7            | Right    | 0 ]
     else if ( opt == TPS6293x-SS ):
-      [SS | 7 | Left ]
-    [RT | 1 | Left ]
-    [BST | 6 | Right ]
-    [SW | 5 | Right ]
-    [FB | 8 | Right ]
-    [GND | 4 | Right ]
+      [SS    | 7            | Left     | 0]
+    [RT      | 1            | Left     | 0 ]
+    [GND     | 4            | Left     | 2]
+    [BST     | 6            | Right    | 0 ]
+    [SW      | 5            | Right    | 1]
+    [FB      | 8            | Right    | 2]
+
 
   val box = BoxSymbol(self)
+  set-grid(box, [3,2])
+  set-alignment(N, self.BST)
+  set-alignment(N, self.SW)
+  set-alignment(S, self.FB)
+  val card-size = Dims(0.4, 0.3)
+  add-decorator(box, self.EN, CardinalityDecorator(InputPin, size = card-size))
+
+  if opt == TPS6293x-PG:
+    add-decorator(box, self.PG, OpenCollectorDecorator())
+
   assign-symbol $ create-symbol(box)
 
   val pkg = SOT(
