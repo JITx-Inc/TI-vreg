@@ -79,7 +79,9 @@ public pcb-component component (pn:TPS6208x-PN):
   property(self.Vin-MIN) = 2.3
 
   property(self.V-REF) = min-typ-max(0.438, 0.45, 0.462) ; Volts
-  property(self.I-REF) = typ-max(10.0e-9, 100.0e-9) ; Amps
+  ; property(self.I-REF) = typ-max(10.0e-9, 100.0e-9) ; Amps
+  ; Bug in Design Explorer calling this to fatal
+  property(self.I-REF) = min-typ-max(10.0e-9, 10.0e-9, 100.0e-9) ; Amps
 
   property(self.R-Discharge) = switch(pn):
     TPS62080ADSG: min-typ-max(25.0, 40.0, 65.0)
