@@ -113,8 +113,10 @@ public pcb-component component (pn:TPS6293x-PN):
   property(self.Ton-MAX) = 7.0e-6 ; Seconds
   property(self.Toff-MIN) = 140.0e-9 ; Seconds
 
-  property(self.V-EN-RISE) = typ-max(1.21, 1.28)
-  property(self.V-EN-FALL) = min-typ(1.1, 1.17)
+  ; property(self.V-EN-RISE) = typ-max(1.21, 1.28)
+  ; Bug in design explorer causes this to fatal
+  property(self.V-EN-RISE) = min-typ-max(1.21, 1.21, 1.28)
+  property(self.V-EN-FALL) = min-typ-max(1.1, 1.17, 1.17)
 
 doc: \<DOC>
 Compute the Frequency for a given RT pull-down resistor
