@@ -383,7 +383,7 @@ defn compute-buck-solution (cst:BuckConstraints) -> [BuckSolution, Instantiable]
 
   ; TODO - check I-peak here.
   val I-margin = (30 %)
-  val I-peak-check = I-peak * I-margin
+  val I-peak-check = I-peak + (I-peak * I-margin)
   ; if not (property(L-type.rated-current) > I-peak-check):
 
   val min-C-out = compute-min-C-out(cst, L)
