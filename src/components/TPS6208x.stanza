@@ -4,11 +4,13 @@ defpackage TI-vreg/components/TPS6208x :
   import math
   import jitx
   import jitx/commands
+  import jitx/parts
 
-  import jsl/symbols
-  import jsl/landpatterns
-  import jsl/design/introspection
+  import jsl
+  import jsl/utils
   import power-systems
+  import inductors/specs
+  import voltage-divider
 
 public pcb-enum TI-vreg/components/TPS6208x/TPS6208x-PN:
   TPS62080DSG
@@ -97,13 +99,11 @@ public defn MFR-Suggested-Solution () -> BuckSolution:
   BuckSolution(L = 1.0e-6, C-in = 10.0e-6, C-out = 22.0e-6)
 
 public pcb-module device (pn:TPS6208x-PN -- snooze-mode:True|False, snooze-conn?:Maybe<Instantiable> = None()):
+  port buck : buck-converter([])
 
   public inst SW : component(pn)
   net GND (SW.GND, SW.EPAD)
 
-  ; This port is primarily a tool for using the
-  ;  Buck Converter Generator functions.
-  port buck : buck-converter([])
   ; Connect to the buck bundle
   connect-buck-converter(self.buck, SW.VIN, SW.GND, SW.SW, SW.FB)
 
@@ -120,3 +120,102 @@ public pcb-module device (pn:TPS6208x-PN -- snooze-mode:True|False, snooze-conn?
       val [p1, p2] = get-element-ports(pull)
       net (SW.MODE, p1)
       net (p2, snooze-ep)
+
+doc: \<DOC>
+Construct a Buck Converter Circuit for TPS6208x series
+
+@member conv
+@member enable
+@member power-good
+<DOC>
+public defn circuit (
+  pn:TPS6208x-PN,
+  cxt:BuckConstraints,
+  buck-sol?:Maybe<BuckSolution> = One(MFR-Suggested-Solution()),
+  --
+  snooze-mode:True|False,
+  snooze-conn?:Instantiable = ?
+  C-query?:CapacitorQuery = ?
+  ) -> Instantiable:
+
+  pcb-module circuit-type:
+    port conv : power-converter
+    port enable
+    port power-good
+
+    public inst IC : device(pn, snooze-mode = snooze-mode, snooze-conn? = snooze-conn?)
+
+    net GND (conv.VIN.V-, conv.VOUT.V-, IC.buck.gnd)
+    net (conv.VIN.V+, IC.buck.vin)
+
+    val L-series = None()
+    val C-series = E12()
+    val C-query = match(C-query?):
+      (_:None): CapacitorQuery(
+          type = "ceramic",
+          temperature-coefficient_code = "X7R"
+          case = ["0603", "0805", "1206"]
+          precision = precision(C-series)
+        )
+      (given:One<CapacitorQuery>): value(given)
+
+
+    val sol = match(buck-sol?):
+      (_:None): compute-solution(cxt)
+      (given:One<BuckSolution>): value(given)
+
+    val vout-max = max-value(v-out(cxt))
+    val vin-max = max-value(v-in(cxt))
+
+    ; TODO - Check vin max against the input voltage spec
+    ;   for the chip.
+
+    val V-margin = cap-V-margin(cxt)
+    val C-in-type = create-capacitor(
+      C-query
+      capacitance = C-in(sol),
+      rated-voltage = AtLeast(vin-max * V-margin)
+    )
+
+    val C-out-filt = Elem $ create-capacitor(
+      C-query
+      capacitance = 4.7e-9,
+      rated-voltage = AtLeast(vout-max * V-margin)
+    )
+
+    val C-out-bulk = Elem $ create-capacitor(
+      C-query
+      capacitance = C-out(sol),
+      rated-voltage = AtLeast(vout-max * V-margin)
+    )
+
+    val L-nH = to-nH(L(sol))
+    val series = inductors/components/XFL3012/XFL3012-specs
+    val [L-in-series, specs] = unpack $ get-specs(L-nH, series)
+    val L-type = inductors/components/XFL3012/component(L-in-series)
+    val L = to-H(L-in-series)
+
+    val buck = BuckArchitecture(
+      cin = C-in-type,
+      cout = C-out-filt | C-out-bulk,
+      coil = L-type,
+    )
+
+    val outputs = make-circuit(buck, IC.buck)
+    val vout-port = value(outputs[0])
+    net VOUT-n (vout-port, self.conv.VOUT.V+, IC.SW.VOS)
+
+    val fb-cst = InverseDividerConstraints(
+      ; Input is the voltage reference of the
+      ;   converter
+      v-in = property(IC.SW.V-REF)
+      v-out = v-out(cxt)
+      current = 100.0e-6
+    )
+
+    val fb-div-type = voltage-divider(fb-cst)
+    public inst fb-div : fb-div-type
+    net (fb-div.hi, vout-port)
+    net (fb-div.out, IC.buck.feedback)
+    net (fb-div.lo, GND)
+  circuit-type
