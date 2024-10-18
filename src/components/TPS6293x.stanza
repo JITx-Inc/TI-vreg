@@ -4,17 +4,14 @@ defpackage TI-vreg/components/TPS6293x :
   import math
   import jitx
   import jitx/commands
-  import jitx/parts/query-api
+  import jitx/parts
 
-  import jsl/errors
-  import jsl/ensure
-  import jsl/bundles
-  import jsl/design/E-Series
-  import jsl/symbols
-  import jsl/landpatterns
-  import jsl/circuits/Network
+  import jsl
+  import jsl/utils
+  import power-systems
+  import inductors/specs
+  import voltage-divider
 
-  import power-systems/DC-DC/buck
 
 public pcb-enum TI-vreg/components/TPS6293x/TPS6293x-PN:
   TPS62932DRL
@@ -366,3 +363,166 @@ public pcb-module device (
       net UVLO-EN (SW.EN, uvlo-div.out)
       net (GND, uvlo-div.p[2])
 
+
+defn select-inductor-type (L-val:Toleranced) -> [Instantiable, Double]:
+  val L-nH = to-nH(typ(L-val))
+  val series = inductors/components/NRS5040/NRS5040-specs
+  val [L-in-series, specs] = unpack $ get-ceil-specs(L-nH, series)
+  val L-type = inductors/components/NRS5040/component(L-in-series)
+  val L = to-H(L-in-series)
+  [L-type, L]
+
+defn compute-buck-solution (cst:BuckConstraints) -> [BuckSolution, Instantiable]:
+
+  val L-val = compute-L(cst)
+
+  ; Select from a known series
+  val [L-type, L] = select-inductor-type(L-val)
+
+  val I-peak = compute-peak-current(cst, L)
+
+  ; TODO - check I-peak here.
+  val I-margin = (30 %)
+  val I-peak-check = I-peak * I-margin
+  ; if not (property(L-type.rated-current) > I-peak-check):
+
+  val min-C-out = compute-min-C-out(cst, L)
+
+  ; Per datasheet - there is an additional multiple on typical output capacitance
+  val dc = typ $ duty-cycle(cst)
+  val K = value $ K(cst)
+  val coeff = ((1.0 - dc) * (1.0 + K)) + ((K * K / 12.0) * (2.0 - dc))
+  val C-out-calc = min-C-out * coeff
+
+  ; Datasheet suggests at least 20uF of bulk capacitance
+  val min-bulk-cap = 20.0e-6
+  val C-out = max(min-bulk-cap, C-out-calc)
+
+  val C-in = compute-min-C-in(cst)
+
+  [BuckSolution(L, C-in, C-out), L-type]
+
+public defn circuit (
+  pn:TPS6293x-PN
+  cxt:BuckConstraints,
+  --
+  num-in-caps:Int = 2,
+  num-out-caps:Int = 2,
+  freq:Double|False = false,
+  SS-period:Toleranced|False = false,
+  UVLO:Double|[Double,Double]|False = false,
+  buck-sol?:BuckSolution = ?
+  C-query?:CapacitorQuery = ?
+  R-query:ResistorQuery = ResistorQuery()
+  ) -> Instantiable:
+  pcb-module circuit-type:
+    port conv : power-converter
+
+    public inst IC : device(pn, freq = freq, SS-period = SS-period, UVLO = UVLO)
+
+    net (conv.VIN.V+, IC.SW.VIN)
+    net GND (IC.SW.GND, conv.VIN.V-, conv.VOUT.V-)
+
+    val [buck-sol, L-type] = match(buck-sol?):
+      (_:None): compute-buck-solution(cxt)
+      (given:One<BuckSolution>):
+        val sol = value(given)
+        val [L-type, L] = select-inductor-type $ typ $ L(sol)
+        [sol, L-type]
+
+    val C-series = E12()
+    val C-query = match(C-query?):
+      (_:None): CapacitorQuery(
+          type = "ceramic",
+          temperature-coefficient_code = "X7R"
+          case = ["0603", "0805", "1206"]
+        )
+      (given:One<CapacitorQuery>): value(given)
+
+    ; Input Capacitance
+    val vin-max = max-value $ v-in(cxt)
+    val C-in-val = find-ceil(C-series, C-in(buck-sol) / to-double(num-in-caps))
+    val C-in-max = find-ceil(C-series, 1.1 * C-in-val)
+
+    val V-margin = cap-V-margin(cxt)
+
+    val C-in-type = Elem $ create-capacitor(
+      C-query
+      capacitance = min-max(C-in-val, C-in-max)
+      precision = precision(C-series)
+      rated-voltage = AtLeast(vin-max * V-margin)
+    )
+
+    ; Output Capacitance
+    val vout-max = max-value $ v-out(cxt)
+
+    val C-out-val = find-ceil(C-series, C-out(buck-sol) / to-double(num-out-caps))
+    val C-out-bulk = Elem $ create-capacitor(
+      C-query
+      capacitance = C-out-val,
+      precision = precision(C-series)
+      rated-voltage = AtLeast(vout-max * V-margin)
+    )
+
+    ; Per Datasheet - smaller capacitor for noise considerations
+    val C-out-filt = Elem $ create-capacitor(
+      C-query
+      capacitance = 4.7e-9,
+      precision = (5 %)
+      rated-voltage = AtLeast(vout-max * V-margin)
+    )
+
+    ; Bootstrap
+    val C-bst = Elem $ create-capacitor(
+      C-query
+      capacitance = 0.1e-6,
+      precision = (10 %)
+      rated-voltage = AtLeast(vin-max * V-margin)
+    )
+
+    val R-damp = Elem $ create-resistor(
+      R-query
+      resistance = 0.0,
+    )
+
+    ; Construct the Buck Converter with a Generator
+
+    val buck = BuckArchitecture(
+      cin = Parallel(repeat(C-in-type, num-in-caps)),
+      cout = C-out-filt | Parallel(repeat(C-out-bulk, num-out-caps)),
+      coil = Elem $ L-type,
+      bst? = One $ (C-bst + R-damp)
+    )
+
+    val outputs = make-circuit(buck, IC.buck)
+    val vout-port = value(outputs[0])
+    net V5v (vout-port, conv.VOUT.V+)
+
+    ; Finally - construct the feedback divider
+    val fb-cst = InverseDividerConstraints(
+      ; Input is the voltage reference of the
+      ;   converter
+      v-in = property(IC.SW.V-REF)
+      v-out = v-out(cxt)
+      current = 100.0e-6
+    )
+
+    val fb-div-type = voltage-divider(fb-cst, name? = One $ "fb-5V")
+    inst fb-div : fb-div-type
+    net (fb-div.hi, vout-port)
+    net (fb-div.out, IC.SW.FB)
+    net (fb-div.lo, GND)
+
+    ; Apply a cap accross the high side resistor as a
+    ;  hedge in case we need to tune the control loop
+    val C-fb = insert-capacitor(
+      fb-div.hi, fb-div.out
+      C-query,
+      capacitance = 10.0e-12
+      precision = (10 %)
+      rated-voltage = AtLeast(typ(v-out(cxt)) * V-margin)
+    )
+
+    instance-status(C-fb):
+      bom-status = NotInBOM
+  circuit-type
