@@ -148,6 +148,9 @@ public defn circuit (
     net GND (conv.VIN.V-, conv.VOUT.V-, IC.buck.gnd)
     net (conv.VIN.V+, IC.buck.vin)
 
+    net (enable, IC.SW.EN)
+    net (power-good, IC.SW.PG)
+
     val L-series = None()
     val C-series = E12()
     val C-query = match(C-query?):
