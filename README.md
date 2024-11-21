@@ -7,7 +7,7 @@ TI-vreg = { git = "JITx-Inc/TI-VREG", version = "0.3.2" }
 
 # TPS6208x
 ## Component
-This is the family of Texas instruments [TPS6280](https://www.ti.com/lit/ds/symlink/tps62080.pdf) component. 
+This is the family of Texas instruments [TPS6280](https://www.ti.com/lit/ds/symlink/tps62080.pdf) components. 
 - Voltage input: 2.3 - 6.0V
 - Voltage output: 0.5 - 4.0V
 - Maximum current: 1.2A
