@@ -1,5 +1,5 @@
 name = "TI-vreg"
-version = "0.3.3"
+version = "0.3.4"
 [dependencies]
 power-systems = { git = "JITx-Inc/power-systems", version = "0.5.0" }
 inductors = { git = "JITx-Inc/inductors", version = "0.3.0" }
