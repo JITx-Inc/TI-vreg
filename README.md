@@ -49,7 +49,7 @@ Circuit Includes:
         resistance = 0.0,
         precision = (1 %)
       )
-    C-query? = cap-query
+    C-query? = C-query
     )
 ```
 ### Ports
