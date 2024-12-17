@@ -135,7 +135,8 @@ public defn circuit (
   --
   snooze-mode:True|False,
   snooze-conn?:Instantiable = ?
-  C-query?:CapacitorQuery = ?
+  C-query:CapacitorQuery = get-default-capacitor-query()
+  R-query:ResistorQuery = get-default-resistor-query()
   ) -> Instantiable:
 
   pcb-module circuit-type:
@@ -153,15 +154,6 @@ public defn circuit (
 
     val L-series = None()
     val C-series = E12()
-    val C-query = match(C-query?):
-      (_:None): CapacitorQuery(
-          type = "ceramic",
-          temperature-coefficient_code = "X7R"
-          case = ["0603", "0805", "1206"]
-          precision = precision(C-series)
-        )
-      (given:One<CapacitorQuery>): value(given)
-
 
     val sol = match(buck-sol?):
       (_:None): compute-solution(cxt)
@@ -214,6 +206,7 @@ public defn circuit (
       v-in = property(IC.SW.V-REF)
       v-out = v-out(cxt)
       current = 100.0e-6
+      base-query = R-query
     )
 
     val fb-div-type = voltage-divider(fb-cst)
