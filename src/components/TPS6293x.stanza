@@ -282,87 +282,95 @@ If a [Double, Double] tuple is passed, then the first value is the UVLO start th
 second value is the UVLO stop threshold, effectively given the user the ability to control the
 hysteresis configuration of the UVLO.
 <DOC>
-public pcb-module device (
+public defn device (
   pn:TPS6293x-PN
   --
   freq:Double|False = false,
   SS-period:Toleranced|False = false,
-  UVLO:Double|[Double,Double]|False = false
-  ):
-  ; This port is primarily a tool for using the
-  ;  Buck Converter Generator functions.
-  port buck : buck-converter([Buck-Bootstrap])
+  UVLO:Double|[Double,Double]|False = false,
+  R-query:ResistorQuery = get-default-resistor-query(),
+  C-query:CapacitorQuery = get-default-capacitor-query()
+):
 
-  public inst SW : component(pn)
-  net GND (SW.GND)
+  pcb-module device-int:
+    ; This port is primarily a tool for using the
+    ;  Buck Converter Generator functions.
+    port buck : buck-converter([Buck-Bootstrap])
 
-  ; Connect to the buck bundle
-  connect-buck-converter(self.buck, SW.VIN, SW.GND, SW.SW, SW.FB, SW.BST)
+    public inst SW : component(pn)
+    net GND (SW.GND)
 
-  if freq is-not False:
-    val prec = (1 %)
-    val RT-val = compute-timing-resistance(freq as Double)
-    val R-std = closest-std-val(RT-val, prec)
-    ; val exp-freq = compute-freq(R-std +/- prec)
-    ; println("Computed Freq: %_" % [exp-freq])
-    insert-resistor(SW.RT, SW.GND,
-      resistance = R-std,
-      precision = prec
-      short-trace? = true
-    )
-  else:
-    no-connect(SW.RT)
+    ; Connect to the buck bundle
+    connect-buck-converter(self.buck, SW.VIN, SW.GND, SW.SW, SW.FB, SW.BST)
 
-  if has-SS?(pn) and SS-period is-not False:
-    ; Compute Timing SS
-    val SS = SS-period as Toleranced
-    val SS-vals = compute-SS-cap(SS,
-      vref = typ(property(SW.V-REF))
-      I-src = typ(property(SW.I-ss))
-    )
-
-    val series = E24()
-    val C-SS-typs = to-tuple $ for v in find-in-range(series, SS-vals as Toleranced) seq:
-      typ(v)
-    val C-SS-range = min-max(minimum(C-SS-typs), maximum(C-SS-typs))
-
-    ; println("SS: %_ " % [C-SS-range])
-    insert-capacitor(
-      SW.SS, SW.GND,
-      capacitance = C-SS-range,
-      precision = precision(series)
-      type = "ceramic",
-      short-trace? = true
-      temperature-coefficient_code = "X7R",
-      rated-voltage = AtLeast(max-value(property(SW.V-REF)) * 2.0)
-    )
-
-  match(UVLO):
-    (_:False): false
-    (given:Double|[Double, Double]):
+    if freq is-not False:
       val prec = (1 %)
-      val [hi-val, lo-val, Ven] = compute-uvlo-R(given, prec)
-
-      ; println("UVLO: R-hi=%_ R-lo=%_ Ven-rise=%_ Ven-fall=%_" % [hi-val, lo-val, max-value(Ven), min-value(Ven)])
-      val max-Ven-thresh = 5.5
-      if max-value(Ven) > max-Ven-thresh:
-        throw $ ValueError("Invalid Ven '%_' - Must be less than threshold '%_'" % [max-Ven-thresh])
-
-      val R-hi = Elem $ create-resistor(
-        resistance = hi-val,
+      val RT-val = compute-timing-resistance(freq as Double)
+      val R-std = closest-std-val(RT-val, prec)
+      ; val exp-freq = compute-freq(R-std +/- prec)
+      ; println("Computed Freq: %_" % [exp-freq])
+      insert-resistor(
+        SW.RT, SW.GND,
+        R-query,
+        resistance = R-std,
         precision = prec
+        short-trace? = true
       )
-      val R-lo = Elem $ create-resistor(
-        resistance = lo-val,
-        precision = prec
+    else:
+      no-connect(SW.RT)
+
+    if has-SS?(pn) and SS-period is-not False:
+      ; Compute Timing SS
+      val SS = SS-period as Toleranced
+      val SS-vals = compute-SS-cap(SS,
+        vref = typ(property(SW.V-REF))
+        I-src = typ(property(SW.I-ss))
       )
 
-      inst uvlo-div : create-circuit(R-hi + Tap(`out, R-lo))
+      val series = E24()
+      val C-SS-typs = to-tuple $ for v in find-in-range(series, SS-vals as Toleranced) seq:
+        typ(v)
+      val C-SS-range = min-max(minimum(C-SS-typs), maximum(C-SS-typs))
 
-      net (SW.VIN, uvlo-div.p[1])
-      net UVLO-EN (SW.EN, uvlo-div.out)
-      net (GND, uvlo-div.p[2])
+      ; println("SS: %_ " % [C-SS-range])
+      insert-capacitor(
+        SW.SS, SW.GND,
+        C-query,
+        capacitance = C-SS-range,
+        precision = precision(series)
+        short-trace? = true
+        rated-voltage = AtLeast(max-value(property(SW.V-REF)) * 2.0)
+      )
 
+    match(UVLO):
+      (_:False): false
+      (given:Double|[Double, Double]):
+        val prec = (1 %)
+        val [hi-val, lo-val, Ven] = compute-uvlo-R(given, prec)
+
+        ; println("UVLO: R-hi=%_ R-lo=%_ Ven-rise=%_ Ven-fall=%_" % [hi-val, lo-val, max-value(Ven), min-value(Ven)])
+        val max-Ven-thresh = 5.5
+        if max-value(Ven) > max-Ven-thresh:
+          throw $ ValueError("Invalid Ven '%_' - Must be less than threshold '%_'" % [max-Ven-thresh])
+
+        val R-hi = Elem $ create-resistor(
+          R-query,
+          resistance = hi-val,
+          precision = prec
+        )
+        val R-lo = Elem $ create-resistor(
+          R-query,
+          resistance = lo-val,
+          precision = prec
+        )
+
+        inst uvlo-div : create-circuit(R-hi + Tap(`out, R-lo))
+
+        net (SW.VIN, uvlo-div.p[1])
+        net UVLO-EN (SW.EN, uvlo-div.out)
+        net (GND, uvlo-div.p[2])
+  ; Return Instantiable
+  device-int
 
 defn select-inductor-type (L-val:Toleranced) -> [Instantiable, Double]:
   val L-nH = to-nH(typ(L-val))
@@ -412,13 +420,13 @@ public defn circuit (
   SS-period:Toleranced|False = false,
   UVLO:Double|[Double,Double]|False = false,
   buck-sol?:BuckSolution = ?
-  C-query?:CapacitorQuery = ?
-  R-query:ResistorQuery = ResistorQuery()
+  C-query:CapacitorQuery = get-default-capacitor-query()
+  R-query:ResistorQuery = get-default-resistor-query()
   ) -> Instantiable:
   pcb-module circuit-type:
     port conv : power-converter
 
-    public inst IC : device(pn, freq = freq, SS-period = SS-period, UVLO = UVLO)
+    public inst IC : device(pn, freq = freq, SS-period = SS-period, UVLO = UVLO, R-query = R-query, C-query = C-query)
 
     net (conv.VIN.V+, IC.SW.VIN)
     net GND (IC.SW.GND, conv.VIN.V-, conv.VOUT.V-)
@@ -431,13 +439,6 @@ public defn circuit (
         [sol, L-type]
 
     val C-series = E12()
-    val C-query = match(C-query?):
-      (_:None): CapacitorQuery(
-          type = "ceramic",
-          temperature-coefficient_code = "X7R"
-          case = ["0603", "0805", "1206"]
-        )
-      (given:One<CapacitorQuery>): value(given)
 
     ; Input Capacitance
     val vin-max = max-value $ v-in(cxt)
@@ -504,7 +505,8 @@ public defn circuit (
       ;   converter
       v-in = property(IC.SW.V-REF)
       v-out = v-out(cxt)
-      current = 100.0e-6
+      current = 100.0e-6,
+      base-query = R-query
     )
 
     val fb-div-type = voltage-divider(fb-cst, name? = One $ "fb-5V")
