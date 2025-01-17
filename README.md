@@ -49,7 +49,6 @@ Circuit Includes:
         resistance = 0.0,
         precision = (1 %)
       )
-    C-query? = C-query
     )
 ```
 ### Ports
@@ -65,7 +64,7 @@ Circuit Includes:
   --
 - snooze-mode:True|False
 - snooze-conn?:Instantiable = ?
-- C-query?:CapacitorQuery = ?
+- C-query:CapacitorQuery = ?
 
 # TPS6293x
 ## Component
