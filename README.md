@@ -2,7 +2,7 @@
 
 In slm.toml add:
 ```
-TI-vreg = { git = "JITx-Inc/TI-VREG", version = "0.3.4" }
+TI-vreg = { git = "JITx-Inc/TI-VREG", version = "0.4.0" }
 ```
 
 # TPS6208x
